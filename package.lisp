@@ -1,5 +1,7 @@
 (defpackage :swarmmap
   (:use :cl
-        :usocket
+        :iolib.sockets
+        :cffi
+        :swap-bytes
         :mersenne))
 

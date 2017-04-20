@@ -4,6 +4,7 @@
   :serial t
   :description "Swarmmap"
   :author "Oblivia Simplex <oblivia@paranoici.org>"
-  :depends-on (#:usocket)
+  :depends-on (#:iolib
+               #:mersenne)
   :components ((:file "package")
                (:file "swarmmap")))
