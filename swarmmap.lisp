@@ -24,97 +24,68 @@
 (defstruct header
   (type)
   (fields '() :type cons)
-  (cstruct)
-  (checksum-fn))
+  (cstruct))
 
-(defparameter *udp-header*
-  (make-header
-   :type :udp
-   :fields (list (make-hfield :name 'sport :bits 16)
-                 (make-hfield :name 'dport :bits 16)
-                 (make-hfield :name 'len   :bits 16)
-                 (make-hfield :name 'checksum :bits 16))
-   :cstruct (cffi:defcstruct udp-header
-              (sport :uint16)
-              (dport :uint16)
-              (len   :uint16)
-              (checksum :uint16))
-   :checksum-fn #'udp-checksum))
+(defun ip-checksum (p)
+  (checksum-16 (header-halfwords :ip (particle-header :ip p))))
 
-(defun udp-checksum ())
+(defun %uint-keyword (bits)
+  (intern (format nil "UINT~D" bits) :keyword))
 
-(defparameter *tcp-header*
-  (make-header
-   :type :tcp
-   :fields (list (make-hfield :name 'sport :bits 16)
-                 (make-hfield :name 'dport :bits 16)
-                 (make-hfield :name 'seqno :bits 32)
-                 (make-hfield :name 'ackno :bits 32)
-                 (make-hfield :name 'off+res+flags :bits 16)
-                 (make-hfield :name 'window :bits 16)
-                 (make-hfield :name 'checksum :bits 16)
-                 (make-hfield :name 'urgent :bits 16)
-                 (make-hfield :name 'opt+pad :bits 32))
-   :cstruct (cffi:defcstruct tcp-header
-              (sport :uint16)
-              (dport :uint16)
-              (seqno :uint32)
-              (ackno :uint32)
-              (off+res+flags :uint16)
-              (window :uint16)
-              (checksum :uint16)
-              (urgent :uint16)
-              (opt+pad :uint8))
-   :checksum-fn #'tcp-checksum))
+(defmacro define-header-layout (symbol names-bits)
+  (let ((n-b (if (symbolp names-bits)
+                 (symbol-value names-bits)
+                 names-bits))
+        (struct (intern (format nil "~A-HEADER" symbol)))
+        (param (intern (format nil "*~A-HEADER-LAYOUT*" symbol))))
+    `(defparameter ,param
+       (make-header
+        :type ,symbol
+        :fields (list ,@(loop for (name bits) in n-b
+                              collect
+                              (make-hfield :name name :bits bits)))
+        :cstruct (cffi:defcstruct ,struct
+                   ,@(loop for (name bits) in n-b
+                           collect
+                           (list name (%uint-keyword bits))))))))
 
-(defun tcp-checksum ())
+(define-header-layout :udp ((sport 16)
+                            (dport 16)
+                            (len 16)
+                            (checksum 16)))
 
-(defparameter *icmp-header*
-  (make-header
-   :type :icmp
-   :fields (list (make-hfield :name 'type :bits 8)
-                 (make-hfield :name 'code :bits 8)
-                 (make-hfield :name 'checksum :bits 16)
-                 (make-hfield :name 'quench :bits 32))
-   :cstruct (cffi:defcstruct icmp-header
-              (type :uint8)
-              (code :uint8)
-              (checksum :uint16)
-              (quench :uint32))
-   :checksum-fn #'icmp-checksum))
+(define-header-layout :tcp ((sport 16)
+                            (dport 16)
+                            (seqno 32)
+                            (ackno 32)
+                            (off+res+flags 16)
+                            (window 16)
+                            (checksum 16)
+                            (urgent 16)
+                            (opt+pad 16)))
 
-(defun icmp-checksum ())
+(define-header-layout :icmp ((type 8)
+                             (code 8)
+                             (checksum 16)
+                             (quench 32)))
 
-(defparameter *ip-header*
-  (make-header
-   :type :ip
-   :fields (list (make-hfield :name 'ver-ihl :bits 8)
-                 (make-hfield :name 'tos :bits 8)
-                 (make-hfield :name 'len :bits 16)
-                 (make-hfield :name 'id :bits 16)
-                 (make-hfield :name 'flags+offset :bits 16)
-                 (make-hfield :name 'ttl :bits 8)
-                 (make-hfield :name 'protocol :bits 8)
-                 (make-hfield :name 'checksum :bits 16)
-                 (make-hfield :name 'saddr :bits 32)
-                 (make-hfield :name 'daddr :bits 32)
-                 (make-hfield :name 'opt+pad :bits 32))
-   :cstruct (cffi:defcstruct ip-header
-              (ver-ihl :uint8)
-              (tos :uint8)
-              (len :uint16)
-              (id  :uint16)
-              (flags+offset :uint16)
-              (ttl :uint8)
-              (protocol :uint8)
-              (checksum :uint16)
-              (saddr :uint32)
-              (daddr :uint32)
-              (opt+pad :uint32))
-  :checksum-fn #'ip-checksum))
+(define-header-layout :ip ((ver-ihl 8)
+                           (tos 8)
+                           (len 16)
+                           (id 16)
+                           (flags+offset 16)
+                           (ttl 8)
+                           (protocol 8)
+                           (checksum 16)
+                           (saddr 32)
+                           (daddr 32)
+                           (opt+pad 32)))
 
 (defparameter *header-formats*
-  (list *ip-header* *tcp-header* *udp-header* *icmp-header*))
+  (list *ip-header-layout*
+        *tcp-header-layout*
+        *udp-header-layout*
+        *icmp-header-layout*))
 
 (defun lookup-layout (type)
   (find type *header-formats* :key #'header-type))
@@ -122,12 +93,8 @@
 (defun sizeof-header (type)
   (isys:sizeof (header-cstruct (lookup-layout type))))
 
-(defun ip-checksum (p)
-  (checksum-16 (header-halfwords :ip (particle-header :ip p))))
-
 (defun header-halfwords (type data)
-  (let (;;(data (particle-header type p :endian :big))
-        (layout (lookup-layout type))
+  (let ((layout (lookup-layout type))
         (halfwords ())
         (bit 8)
         (h 0))
@@ -156,15 +123,23 @@
     (ldb (byte 16 0) (lognot csum))))
 
 (defun +test-checksum-16 ()
-  (let ((data (loop repeat 12 collect (random #x10000))))
-    (assert (zerop
-             (checksum-16 (cons
-                           (checksum-16 data)
-                           data))))))
+  (let ((data (loop repeat 12 collect (random #x10000)))
+        (res  (zerop
+               (checksum-16 (cons
+                             (checksum-16 data)
+                             data)))))
+    (when (null res)
+      (format t "+test-checksum-16 failed.
+DATA: ~S
+CHECKSUM: ~X
+RECV-CHECKSUM: ~X~%"
+              data (checksum-16 data)
+              (checksum-16 (cons (checksum-16 data) data))))
+    (assert res)))
+
 (defun +bench-checksum-16 ()
-  ;; works *most* of the time. about one in #x10000 it'll fail.
-  ;; not sure why, yet. 
-  (time (loop repeat #x1000 do (+test-checksum-16))))
+  (time (loop repeat #x100000 do (+test-checksum-16))))
+
 ;; first build lists of bit widths for each field, since we'll
 ;; need to have reference to those for packing purposes
 ;; then derive the max vals from those. 
@@ -193,12 +168,12 @@
           (mapcar (lambda (y) (expt 2 (hfield-bits y)))
                   (header-fields header-format))))
 
-(defstruct (particle (:constructor make-particle (prng forms)))
+(defstruct (particle (:constructor make-particle (prng layouts)))
   (fitness)
   (personal-best)
-  (headers (loop for form in forms
-                 collect (cons (header-type form)
-                               (random-header form prng)))))
+  (headers (loop for layout in layouts
+                 collect (cons (header-type layout)
+                               (random-header layout prng)))))
 
 (defun particle-header (hdr p &key (endian :big))
   (labels ((b (x hf)
@@ -227,6 +202,7 @@
   (if (<= width 0) '()
       (cons (ldb (byte 8 0) int)
 	    (little-endian-bytes (ash int -8) (- width 8)))))
+
 (defun big-endian-bytes (int width)
   (reverse (little-endian-bytes int width)))
 ;;
@@ -235,8 +211,9 @@
 
 
 ;; TODO: This could probably be tidied up with some nice macros
-(defun write-ip-header (ip-header frame-len p)
-  (let ((data (particle-header :ip p :endian :big)))
+(defun write-ip-header (ip-header p)
+  (let ((data (particle-header :ip p :endian :big))
+        (frame-len (particle-header-size p)))
     ;; no first build alist of sym-val pairs, mapping over ip-symbols
     ;; then calc checksum using it
     (cffi:with-foreign-slots ((ver-ihl
@@ -260,14 +237,53 @@
             protocol (elt data 6)
             checksum (checksum-16 (header-halfwords :ip data))
             saddr (elt data 8)
-            daddr (elt data 9)+
+            daddr (elt data 9)
             opt+pad (elt data 10)))))
 
-(defun pack-frame (particle payload-size)
-  (let* ((header-sizes (particle-header-sizes particle))
-         (frame-size (reduce #'+ (cons payload-size header-sizes)))
-         (cffi:with-foreign-object (frame :uint8 frame-size)
-           (isys:bzero frame frame-size)
+(defmacro define-header-writer (layout)
+  (let* ((layout-struct (symbol-value layout))
+         (name (intern (format nil "~A-HEADER-WRITER"
+                               (header-type layout-struct))))
+         (field-names
+          (mapcar #'hfield-name
+                  (header-fields layout-struct)))
+        (htype (header-type layout-struct))
+        (hcstruct (header-cstruct layout-struct)))
+    `(defun ,name (buffer particle)
+       (let ((data (particle-header ,htype
+                                    particle
+                                    :endian :big)))
+         (cffi:with-foreign-slots (,field-names
+                                   buffer ,hcstruct)
+         ,@(loop for i from 0
+                 for slot in field-names
+                 collect
+                 `(setf ,slot (elt data ,i)))))
+       buffer)))
 
+(define-header-writer *ip-header-layout*)
+(define-header-writer *tcp-header-layout*)
+(define-header-writer *udp-header-layout*)
+(define-header-writer *icmp-header-layout*)
 
+(defun ~test-write-ip-header (&optional (seed 99))
+  (let* ((rng (make-mt seed))
+         (p (make-particle rng (list *ip-header*)))
+         (hsize (particle-header-size p)))
+    (cffi:with-foreign-pointer (frame hsize)
+      (isys:bzero frame hsize)
+      (let* ((ip-header frame))
+        (format t "IP HEADER: ~S~%" (particle-header :ip p))
+        (write-ip-header ip-header p)
+        (let ((hdr (loop for i below hsize collect
+                                           (mem-aref frame :uint8 i))))
+          (format t "PACKED:    ~S~%" hdr))))))
+
+;(defun pack-frame (particle payload-size)
+;  (let* ((header-sizes (particle-header-sizes particle))
+;         (frame-size (reduce #'+ (cons payload-size header-sizes)))
+;         (cffi:with-foreign-object (frame :uint8 frame-size)
+;           (isys:bzero frame frame-size);
+;
+;))))
        
